@@ -1,7 +1,0 @@
----
-- hosts: localhost
-   become: yes
-   tasks:
-     yum: name=squid state=present
-
-	
