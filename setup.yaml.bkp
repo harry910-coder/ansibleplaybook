@@ -4,7 +4,7 @@
   gather_facts: no
   become: yes
   vars: 
-   - password: S1gsauerp#^%
+   - password: Somthing
 
   tasks:
   - name: Installing squid
