@@ -27,6 +27,15 @@
      service: squid 
      permanent: true 
      state: enabled
+
+  - name: set username and password
+    htpasswd: 
+     path: /etc/squid/users_passwd openshift_installer   
+     name: openshift_installer
+     password: "{{password|password_hash('sha512')}}"
+     owner: root
+     group: root
+     mode: 0640
   - name: Copy a new "squid.conf" file into place, backing up the original if it differs from the copied version
     template:
       src: /root/ansibleplaybook/template
@@ -35,12 +44,6 @@
       group: squid
       owner: root
       backup: yes
-  - name: restart squid
-    service:
-      name: squid
-      state: restarted
-  - name: systemctl
-     
    
  
  # src: /home/asingh-admin/ansible-playbooks/squid.conf
