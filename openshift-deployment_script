@@ -1,0 +1,185 @@
+#!/bin/bash
+#===================================================================================
+#
+#         FILE: update_cluster
+#
+#        USAGE: ./update_cluster.sh [version]_
+#
+#  DESCRIPTION:  This script will check to make sure that a cluster is ready for an update,
+#                back up the etcd database on the cluster,
+#                start the update,
+#                and monitor it for completion.
+#
+#        INPUT: a specific openshift cluster number is optional
+#       OUTPUT: Success/failure messages for a number of checks, and progression of the update
+# REQUIREMENTS: The user must be logged into the cluster via the oc command.
+#         BUGS: assumes user logged in. Does not check
+#        NOTES: probably want to run nohuped, and tail the output, because you will probably time out your session.
+#       AUTHOR: gregory.g.nagy@uscg.mil
+#      COMPANY: Dovel
+#      CREATED: 2022-02-01
+#     MODIFIED:
+#      VERSION: 1.0
+#==================================================================================
+
+#==================================================================================
+# REVISION HISTORY:
+# DATE        AUTHOR            NEW VERSION      DESCRIPTION
+# ----        ------            -----------      -----------
+#==================================================================================
+
+#------------------------------------------------------------------------
+# Variables
+#
+#------------------------------------------------------------------------
+ACTION=$1
+OC="/usr/local/bin/oc"
+SAVEIFS=${IFS}                                # current field separator
+DEBUGLEVEL=0                                  # 1-5 for debug and 0 for none
+if [ "${#@}" -eq "1" ] ; then
+    VERSION=$1
+    echo "You want to update to ${VERSION}"
+fi
+
+#------------------------------------------------------------------------
+# Check cluster readiness
+#    make sure all nodes a ready
+#    all cluster operators are ready
+#    no machine config pools are updating or degraded
+#------------------------------------------------------------------------
+echo "Checking nodes for readiness"
+BAD_NODES=`${OC} get nodes | grep -e "Not" -e "SchedulingDisabled" | wc -l`   # all nodes should have a "Ready" status
+if [ ${BAD_NODES} -ne 0 ] ; then
+
+    echo "One or more nodes are unavailable"
+    ${OC} get nodes | grep -e "Not" -e "SchedulingDisabled"
+    exit 1
+else
+    echo "All nodes are Ready"
+fi
+
+
+
+echo "Checking cluster operators for readiness"
+BAD_COS=`${OC} get co | tail -n +2 |grep -v "True        False         False"| wc -l`
+if [ ${BAD_COS} -ne  0 ] ; then
+    echo "One or more cluster operators are unavailable"
+    ${OC} get co | grep -v "True        False         False"
+    exit 1
+else
+    echo "All cluster operators are Ready"
+fi
+
+echo "Checking Machine Config Pools for readiness"
+BAD_MCP=`${OC} get mcp | tail -n +2 | grep -v "True      False      False"| wc -l`
+if [ ${BAD_MCP} -ne 0 ] ; then
+
+    echo "One or more Machine Config Pools are updating or degraded"
+    ${OC} get mcp | grep -v "True      False      False"
+    exit 1
+else
+    echo "All Machine Config Pools are Ready"
+fi
+
+echo "The cluster looks to be ready for update!"
+
+#------------------------------------------------------------------------
+#
+# Perform a backup of the etcd database here.
+# TBD
+#
+#------------------------------------------------------------------------
+#------------------------------------------------------------------------
+#
+#------------------------------------------------------------------------
+#
+# Check to see if cluster is ready to update and is not allready running an update.
+#
+#------------------------------------------------------------------------
+READY=`${OC} get clusterversion |tail -n +2`
+CURRENT=`echo ${READY} |cut -d' ' -f2` # i will need this later.
+PROGRESSING=`echo ${READY} |cut -d' ' -f4`
+AVAILABLE=`echo ${READY} |cut -d' ' -f3`
+# PROGRESSING?
+#if [ `echo ${READY} |cut -c 33-38` -eq "True " ]; then
+if [[ "${PROGRESSING}"  == "True " ]]; then
+    echo "A cluster update is currently running"
+    exit 1
+# available?
+elif [[ "${AVAILABLE}" == "False" ]]; then
+    echo "A cluster update is not available "
+    exit 1
+else
+    echo "The cluster is ready to be updated."
+fi
+
+#------------------------------------------------------------------------
+#
+# Start the update
+#
+#------------------------------------------------------------------------
+if [  -z "${VERSION}" ]; then
+    VERSION=`${OC} adm upgrade | tail -1 | cut -d' ' -f1`
+    if [ "${VERSION}" == "No" ] ; then
+        echo " There is no version to update to! "
+        exit 0
+    fi
+fi
+echo "starting update to ${VERSION}"
+${OC} adm upgrade --to=${VERSION}
+echo "update started at `date`"
+#------------------------------------------------------------------------
+#
+# Monitor update to completion
+#
+#------------------------------------------------------------------------
+
+sleep 60
+CO_TOTAL=`${OC} get co | tail -n +2 | wc -l`
+PROGRESS=`${OC} get clusterversion |tail -n +2`
+PROGRESSING=`echo ${PROGRESS} |cut -d' ' -f4`
+AVAILABLE=`echo ${PROGRESS} |cut -d' ' -f3`
+if [[ "${PROGRESSING}"  == "True " ]]; then
+    COMPLETE="false"
+fi
+while ( [ "${COMPLETE}" == "false" ])
+do
+    sleep 60
+    #
+    # check cluster operator progress
+    #
+    CO_FINISHED=`${OC} get co | tail -n +2 | grep "True        False         False" | grep -v "${CURRENT}" | wc -l`
+    CO_CURRENT=`${OC} get co | tail -n +2 | grep "True        True          False" | cut -d' ' -f1`
+    echo "${CO_FINISHED} of ${CO_TOTAL} cluster operators updated"
+    echo "Currently updating ${CO_CURRENT} cluster operator"
+    if [ "${CO_FINISHED}" -eq "${CO_TOTAL}" ]; then
+        COMPLETE="true"
+    fi
+
+    #
+    # check to see if pools are updating, and print progress
+    #
+    RUNNING_MCP=`${OC} get mcp | tail -n +2 | grep -v "True      False      False"| wc -l`
+    if [ ${RUNNING_MCP} -ne 0 ] ; then
+        echo "MCPs updating:"
+        ${OC} get mcp
+        echo ""
+        COMPLETE="false"
+    fi
+    #
+    # Check to see if clusterverion is complete
+    #
+    PROGRESS=`${OC} get clusterversion |tail -n +2`
+    PROGRESSING=`echo ${PROGRESS} |cut -d' ' -f4`
+    AVAILABLE=`echo ${PROGRESS} |cut -d' ' -f3`
+    if [[ "${PROGRESSING}"  == "True " ]]; then
+        COMPLETE="false"
+    fi
+done
+#
+# At this point, we are done
+#
+${OC} get clusterversion
+echo "Cluster is updated"
+date
+exit 0
